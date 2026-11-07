@@ -62,11 +62,11 @@ const getDashboardSummary = async (req, res) => {
       }
     ]);
 
-    const totalMonthlyExpenses = expenseAggregation[0]?.totalMonthlyExpenses || 0;
+    const totalMonthlyExpenses = Math.round((expenseAggregation[0]?.totalMonthlyExpenses || 0) * 100) / 100;
     const transactionCount = expenseAggregation[0]?.transactionCount || 0;
 
     // 3. Compute Savings
-    const totalSavings = totalMonthlyIncome - totalMonthlyExpenses;
+    const totalSavings = Math.round((totalMonthlyIncome - totalMonthlyExpenses) * 100) / 100;
     const savingsRate = totalMonthlyIncome > 0
       ? Number(((totalSavings / totalMonthlyIncome) * 100).toFixed(1))
       : 0;
@@ -147,12 +147,12 @@ const getExpensesByMonth = async (req, res) => {
         monthIndex: monthNum,
         month: name,
         year,
-        totalAmount: expenseMap[monthNum]?.totalAmount || 0,
+        totalAmount: Math.round((expenseMap[monthNum]?.totalAmount || 0) * 100) / 100,
         count: expenseMap[monthNum]?.count || 0
       };
     });
 
-    const yearlyTotal = formattedData.reduce((acc, curr) => acc + curr.totalAmount, 0);
+    const yearlyTotal = Math.round(formattedData.reduce((acc, curr) => acc + curr.totalAmount, 0) * 100) / 100;
 
     return res.status(200).json({
       success: true,
@@ -271,10 +271,11 @@ const getCategoryBreakdown = async (req, res) => {
       }
     ]);
 
-    const totalExpense = categoryAggregation.reduce((sum, item) => sum + item.totalAmount, 0);
+    const totalExpense = Math.round(categoryAggregation.reduce((sum, item) => sum + item.totalAmount, 0) * 100) / 100;
 
     const dataWithPercentage = categoryAggregation.map((item) => ({
       ...item,
+      totalAmount: Math.round((item.totalAmount || 0) * 100) / 100,
       percentage: totalExpense > 0
         ? Number(((item.totalAmount / totalExpense) * 100).toFixed(1))
         : 0
@@ -451,14 +452,14 @@ const getSavingsByMonth = async (req, res) => {
       // 3. For active month or months with recorded activity/plan, compute accurately
       const activePlan = planMap[monthNum] || (isCurrentMonth ? fallbackProfile : null);
       const income = Number(activePlan?.monthlyIncome) || 0;
-      const expense = expenseMap[monthNum]?.totalAmount || 0;
+      const expense = Math.round((expenseMap[monthNum]?.totalAmount || 0) * 100) / 100;
       const count = expenseMap[monthNum]?.count || 0;
-      const savings = income - expense;
+      const savings = Math.round((income - expense) * 100) / 100;
       const savingsRate = income > 0 ? Number(((savings / income) * 100).toFixed(1)) : 0;
 
       yearlyIncome += income;
-      yearlyExpenses += expense;
-      yearlySavings += savings;
+      yearlyExpenses = Math.round((yearlyExpenses + expense) * 100) / 100;
+      yearlySavings = Math.round((yearlySavings + savings) * 100) / 100;
 
       return {
         monthIndex: monthNum,

@@ -54,7 +54,7 @@ Extract EVERY individual payment/expense transaction shown and return strictly a
   "transactions": [
     {
       "title": "<Merchant name, recipient person, or short payment description>",
-      "amount": <Total transaction amount as a pure number without currency signs, e.g. 40.00>,
+      "amount": <Exact transaction amount with full paise/cents preserved as a pure number, e.g. 1194.24, 253.50, or 40.00. NEVER drop or round down paise/decimals.>,
       "category": "<Exact match from allowed categories below>",
       "type": "<One of: 'Pocket Money', 'Wish'>",
       "paymentMethod": "<One of: UPI, GPay, PhonePe, Paytm, Credit Card, Debit Card, Net Banking, Cash, Others>",
@@ -82,7 +82,7 @@ Expense Type Rules:
 Extraction Guidelines:
 - If the screenshot shows a list / statement of multiple payments (e.g., 3 transactions), extract ALL of them into the "transactions" array.
 - If it's a single payment receipt, return an array of 1 item in "transactions".
-- "amount" must be a pure positive number (e.g., 40, not "₹40").
+- "amount" must be the exact positive decimal number preserving all paise/cents shown on the bill/receipt/statement (e.g. 1194.24, 253.50, or 40.00). NEVER round down or truncate decimals to integer. Do not include currency symbols or commas.
 - If date is visible (e.g., "7th Nov"), assume year 2026 (or current year) -> "2026-11-07".
 - Ignore incoming received money, refunds, or cashback if clearly indicated; focus on debits/payments/expenses.
 - If the merchant/recipient is unclear, use "Payment".
@@ -212,8 +212,10 @@ Extraction Guidelines:
 
     const validItems = [];
     for (const item of rawItems) {
-      const amount = Number(item.amount);
-      if (isNaN(amount) || amount <= 0) continue;
+      const rawAmount = Number(item.amount);
+      if (isNaN(rawAmount) || rawAmount <= 0) continue;
+      // Preserve full paise precision up to 2 decimal places (e.g. 1194.24)
+      const amount = Math.round(rawAmount * 100) / 100;
 
       const title = item.title ? String(item.title).trim() : 'Payment';
       const category = normalizeCategory(title, item.category);
@@ -330,11 +332,12 @@ const createExpense = async (req, res) => {
     const cleanCat = category ? category.trim() : 'Others';
     const cleanTitle = title.trim();
     const finalType = determineExpenseType(cleanCat, cleanTitle, type);
+    const cleanAmount = Math.round(Number(amount) * 100) / 100;
 
     const expense = await Expense.create({
       user: req.user.id,
       title: cleanTitle,
-      amount: Number(amount),
+      amount: cleanAmount,
       category: cleanCat,
       type: finalType,
       date: date ? new Date(date) : new Date(),
@@ -492,7 +495,7 @@ const updateExpense = async (req, res) => {
     }
 
     if (title) expense.title = title.trim();
-    if (amount !== undefined) expense.amount = Number(amount);
+    if (amount !== undefined) expense.amount = Math.round(Number(amount) * 100) / 100;
     if (category) expense.category = category.trim();
     if (type) {
       expense.type = determineExpenseType(expense.category, expense.title, type);
