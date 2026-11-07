@@ -413,9 +413,10 @@ const getSavingsByMonth = async (req, res) => {
       const isFuture = (year > currentYear) || (year === currentYear && monthNum > currentMonth);
       const hasPlan = !!planMap[monthNum];
       const hasExpenses = !!(expenseMap[monthNum]?.totalAmount > 0);
+      const isCurrentMonth = (year === currentYear && monthNum === currentMonth);
 
-      // 1. If month is before account creation, zero out savings (no user activity / no database records)
-      if (isBeforeCreation) {
+      // 1. If month is before account creation and has no records, zero out
+      if (isBeforeCreation && !hasPlan && !hasExpenses) {
         return {
           monthIndex: monthNum,
           month: name,
@@ -430,8 +431,9 @@ const getSavingsByMonth = async (req, res) => {
         };
       }
 
-      // 2. If month is in future and has neither plan nor recorded expenses, do not inflate savings
-      if (isFuture && !hasPlan && !hasExpenses) {
+      // 2. If month has no plan and no expenses, and is not the current active month:
+      // Zero out! Do NOT fabricate phantom income or savings for months not in DB
+      if (!hasPlan && !hasExpenses && !isCurrentMonth) {
         return {
           monthIndex: monthNum,
           month: name,
@@ -442,12 +444,12 @@ const getSavingsByMonth = async (req, res) => {
           savingsRate: 0,
           count: 0,
           hasPlan: false,
-          isFuture: true
+          isFuture
         };
       }
 
-      // 3. For the active month or months with recorded activity, compute accurately
-      const activePlan = planMap[monthNum] || fallbackProfile;
+      // 3. For active month or months with recorded activity/plan, compute accurately
+      const activePlan = planMap[monthNum] || (isCurrentMonth ? fallbackProfile : null);
       const income = Number(activePlan?.monthlyIncome) || 0;
       const expense = expenseMap[monthNum]?.totalAmount || 0;
       const count = expenseMap[monthNum]?.count || 0;
@@ -491,7 +493,7 @@ const getSavingsByMonth = async (req, res) => {
 };
 
 /**
- * @desc    Get aggregated savings grouped by year
+ * @desc    Get aggregated savings grouped by year (strictly based on actual DB records)
  * @route   GET /api/dashboard/savings-by-year
  * @access  Protected
  */
@@ -504,49 +506,127 @@ const getSavingsByYear = async (req, res) => {
       const u = await User.findById(req.user.id).select('createdAt');
       userCreatedAt = u?.createdAt;
     }
-    const creationYear = userCreatedAt ? new Date(userCreatedAt).getFullYear() : null;
+    const creationDate = userCreatedAt ? new Date(userCreatedAt) : null;
+    const creationYear = creationDate ? creationDate.getFullYear() : null;
+    const creationMonth = creationDate ? (creationDate.getMonth() + 1) : null; // 1-12
 
-    // Aggregate expenses by year starting from account creation year
-    const match = { user: userId };
-    if (creationYear != null) {
-      match.date = { $gte: new Date(creationYear, 0, 1) };
-    }
+    const now = new Date();
+    const currentYear = now.getFullYear();
+    const currentMonth = now.getMonth() + 1; // 1-12
 
-    const yearlyExpenses = await Expense.aggregate([
-      { $match: match },
+    // 1. Fetch all financial plans for this user from DB
+    const allPlans = await FinancialProfile.find({ user: req.user.id }).lean();
+    const planByMonth = {}; // e.g. "2026-11" -> plan
+    const distinctYearsSet = new Set();
+
+    allPlans.forEach((p) => {
+      if (p.month) {
+        planByMonth[p.month] = p;
+        const y = parseInt(p.month.split('-')[0], 10);
+        if (!isNaN(y)) distinctYearsSet.add(y);
+      }
+    });
+
+    const fallbackProfile = allPlans.length > 0
+      ? [...allPlans].sort((a, b) => (b.month || '').localeCompare(a.month || ''))[0]
+      : null;
+
+    // 2. Fetch all expenses aggregated by year and month
+    const expenseAgg = await Expense.aggregate([
+      { $match: { user: userId } },
       {
         $group: {
-          _id: { $year: '$date' },
+          _id: {
+            year: { $year: '$date' },
+            month: { $month: '$date' }
+          },
           totalAmount: { $sum: '$amount' },
           count: { $sum: 1 }
         }
-      },
-      { $sort: { '_id': 1 } }
+      }
     ]);
 
-    // Fallback profile
-    const latestPlan = await FinancialProfile.findOne({ user: req.user.id }).sort({ month: -1 }).lean();
-    const annualIncome = (Number(latestPlan?.monthlyIncome) || 0) * 12;
+    const expenseByYearMonth = {}; // e.g. "2026-11" -> { totalAmount, count }
+    expenseAgg.forEach((item) => {
+      const y = item._id.year;
+      const m = item._id.month;
+      if (y) {
+        distinctYearsSet.add(y);
+        const key = `${y}-${String(m).padStart(2, '0')}`;
+        expenseByYearMonth[key] = {
+          totalAmount: item.totalAmount || 0,
+          count: item.count || 0
+        };
+      }
+    });
 
-    const formattedData = yearlyExpenses.map((item) => {
-      const year = item._id;
-      const expense = item.totalAmount || 0;
-      const income = annualIncome;
-      const savings = income - expense;
-      const savingsRate = income > 0 ? Number(((savings / income) * 100).toFixed(1)) : 0;
+    // Ensure current year is always represented
+    distinctYearsSet.add(currentYear);
+    if (creationYear) distinctYearsSet.add(creationYear);
+
+    const sortedYears = Array.from(distinctYearsSet).sort((a, b) => a - b);
+
+    // 3. For each year, aggregate actual monthly income and expenses strictly from DB
+    const formattedData = sortedYears.map((year) => {
+      let yearIncome = 0;
+      let yearExpense = 0;
+      let yearCount = 0;
+
+      for (let m = 1; m <= 12; m++) {
+        const monthKey = `${year}-${String(m).padStart(2, '0')}`;
+        const plan = planByMonth[monthKey];
+        const expData = expenseByYearMonth[monthKey];
+
+        const isBeforeCreation = creationYear != null && (
+          year < creationYear || (year === creationYear && m < creationMonth)
+        );
+        const isCurrent = (year === currentYear && m === currentMonth);
+        const hasPlan = !!plan;
+        const hasExpenses = !!(expData && expData.totalAmount > 0);
+
+        // Skip months before account creation with no data
+        if (isBeforeCreation && !hasPlan && !hasExpenses) {
+          continue;
+        }
+
+        // Skip months with no plan and no expenses that are not the current active month
+        if (!hasPlan && !hasExpenses && !isCurrent) {
+          continue;
+        }
+
+        const activePlan = plan || (isCurrent ? fallbackProfile : null);
+        const monthIncome = Number(activePlan?.monthlyIncome) || 0;
+        const monthExpense = expData?.totalAmount || 0;
+        const count = expData?.count || 0;
+
+        yearIncome += monthIncome;
+        yearExpense += monthExpense;
+        yearCount += count;
+      }
+
+      const savings = yearIncome - yearExpense;
+      const savingsRate = yearIncome > 0
+        ? Number(((savings / yearIncome) * 100).toFixed(1))
+        : 0;
+
       return {
         year,
-        income,
-        expense,
+        income: yearIncome,
+        expense: yearExpense,
         savings,
         savingsRate,
-        count: item.count || 0
+        count: yearCount
       };
     });
 
+    // Filter to only years that have actual data or current year
+    const finalData = formattedData.filter(
+      (y) => y.year === currentYear || y.income > 0 || y.expense > 0 || y.count > 0
+    );
+
     return res.status(200).json({
       success: true,
-      data: formattedData
+      data: finalData
     });
   } catch (error) {
     console.error('Savings By Year Error:', error.message);
