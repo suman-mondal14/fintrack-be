@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 const Expense = require('../models/Expense');
 const FinancialProfile = require('../models/FinancialProfile');
+const User = require('../models/User');
 const { processUserAutoEmis } = require('../services/emiScheduler');
 
 /**
@@ -324,11 +325,246 @@ const getRecentTransactions = async (req, res) => {
   }
 };
 
+/**
+ * @desc    Get aggregated monthly savings (Income - Expenses) for a given year (12 months)
+ * @route   GET /api/dashboard/savings-by-month
+ * @access  Protected
+ */
+const getSavingsByMonth = async (req, res) => {
+  try {
+    const userId = new mongoose.Types.ObjectId(req.user.id);
+    const year = parseInt(req.query.year, 10) || new Date().getFullYear();
+
+    // Retrieve user's account creation date to restrict phantom records before signup
+    let userCreatedAt = req.user.createdAt;
+    if (!userCreatedAt) {
+      const u = await User.findById(req.user.id).select('createdAt');
+      userCreatedAt = u?.createdAt;
+    }
+    const creationDate = userCreatedAt ? new Date(userCreatedAt) : null;
+    const creationYear = creationDate ? creationDate.getFullYear() : null;
+    const creationMonth = creationDate ? (creationDate.getMonth() + 1) : null; // 1-12
+
+    const now = new Date();
+    const currentYear = now.getFullYear();
+    const currentMonth = now.getMonth() + 1; // 1-12
+
+    const startOfYear = new Date(year, 0, 1);
+    const endOfYear = new Date(year, 11, 31, 23, 59, 59, 999);
+
+    // 1. Aggregate expenses by month for this year
+    const monthlyExpenses = await Expense.aggregate([
+      {
+        $match: {
+          user: userId,
+          date: { $gte: startOfYear, $lte: endOfYear }
+        }
+      },
+      {
+        $group: {
+          _id: { $month: '$date' },
+          totalAmount: { $sum: '$amount' },
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+
+    const expenseMap = {};
+    monthlyExpenses.forEach((item) => {
+      expenseMap[item._id] = {
+        totalAmount: item.totalAmount,
+        count: item.count
+      };
+    });
+
+    // 2. Fetch all monthly plans for this year
+    const yearPrefix = `${year}-`;
+    const plans = await FinancialProfile.find({
+      user: req.user.id,
+      month: { $regex: `^${yearPrefix}` }
+    }).lean();
+
+    const planMap = {};
+    plans.forEach((p) => {
+      const parts = (p.month || '').split('-');
+      if (parts.length === 2) {
+        const mNum = parseInt(parts[1], 10);
+        planMap[mNum] = p;
+      }
+    });
+
+    // Fallback profile for active months that lack an explicit plan
+    let fallbackProfile = await FinancialProfile.findOne({ user: req.user.id }).sort({ month: -1 }).lean();
+
+    const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    let yearlyIncome = 0;
+    let yearlyExpenses = 0;
+    let yearlySavings = 0;
+
+    const formattedData = monthNames.map((name, index) => {
+      const monthNum = index + 1;
+
+      // Check if this month is strictly before the user account was created
+      const isBeforeCreation = creationYear != null && (
+        year < creationYear || (year === creationYear && monthNum < creationMonth)
+      );
+
+      // Check if this month is in the future relative to wall-clock time
+      const isFuture = (year > currentYear) || (year === currentYear && monthNum > currentMonth);
+      const hasPlan = !!planMap[monthNum];
+      const hasExpenses = !!(expenseMap[monthNum]?.totalAmount > 0);
+
+      // 1. If month is before account creation, zero out savings (no user activity / no database records)
+      if (isBeforeCreation) {
+        return {
+          monthIndex: monthNum,
+          month: name,
+          year,
+          income: 0,
+          expense: 0,
+          savings: 0,
+          savingsRate: 0,
+          count: 0,
+          hasPlan: false,
+          isBeforeCreation: true
+        };
+      }
+
+      // 2. If month is in future and has neither plan nor recorded expenses, do not inflate savings
+      if (isFuture && !hasPlan && !hasExpenses) {
+        return {
+          monthIndex: monthNum,
+          month: name,
+          year,
+          income: 0,
+          expense: 0,
+          savings: 0,
+          savingsRate: 0,
+          count: 0,
+          hasPlan: false,
+          isFuture: true
+        };
+      }
+
+      // 3. For the active month or months with recorded activity, compute accurately
+      const activePlan = planMap[monthNum] || fallbackProfile;
+      const income = Number(activePlan?.monthlyIncome) || 0;
+      const expense = expenseMap[monthNum]?.totalAmount || 0;
+      const count = expenseMap[monthNum]?.count || 0;
+      const savings = income - expense;
+      const savingsRate = income > 0 ? Number(((savings / income) * 100).toFixed(1)) : 0;
+
+      yearlyIncome += income;
+      yearlyExpenses += expense;
+      yearlySavings += savings;
+
+      return {
+        monthIndex: monthNum,
+        month: name,
+        year,
+        income,
+        expense,
+        savings,
+        savingsRate,
+        count,
+        hasPlan: !!planMap[monthNum],
+        isBeforeCreation: false
+      };
+    });
+
+    return res.status(200).json({
+      success: true,
+      year,
+      yearlyIncome,
+      yearlyExpenses,
+      yearlySavings,
+      data: formattedData
+    });
+  } catch (error) {
+    console.error('Savings By Month Error:', error.message);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error retrieving monthly savings',
+      error: error.message
+    });
+  }
+};
+
+/**
+ * @desc    Get aggregated savings grouped by year
+ * @route   GET /api/dashboard/savings-by-year
+ * @access  Protected
+ */
+const getSavingsByYear = async (req, res) => {
+  try {
+    const userId = new mongoose.Types.ObjectId(req.user.id);
+
+    let userCreatedAt = req.user.createdAt;
+    if (!userCreatedAt) {
+      const u = await User.findById(req.user.id).select('createdAt');
+      userCreatedAt = u?.createdAt;
+    }
+    const creationYear = userCreatedAt ? new Date(userCreatedAt).getFullYear() : null;
+
+    // Aggregate expenses by year starting from account creation year
+    const match = { user: userId };
+    if (creationYear != null) {
+      match.date = { $gte: new Date(creationYear, 0, 1) };
+    }
+
+    const yearlyExpenses = await Expense.aggregate([
+      { $match: match },
+      {
+        $group: {
+          _id: { $year: '$date' },
+          totalAmount: { $sum: '$amount' },
+          count: { $sum: 1 }
+        }
+      },
+      { $sort: { '_id': 1 } }
+    ]);
+
+    // Fallback profile
+    const latestPlan = await FinancialProfile.findOne({ user: req.user.id }).sort({ month: -1 }).lean();
+    const annualIncome = (Number(latestPlan?.monthlyIncome) || 0) * 12;
+
+    const formattedData = yearlyExpenses.map((item) => {
+      const year = item._id;
+      const expense = item.totalAmount || 0;
+      const income = annualIncome;
+      const savings = income - expense;
+      const savingsRate = income > 0 ? Number(((savings / income) * 100).toFixed(1)) : 0;
+      return {
+        year,
+        income,
+        expense,
+        savings,
+        savingsRate,
+        count: item.count || 0
+      };
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: formattedData
+    });
+  } catch (error) {
+    console.error('Savings By Year Error:', error.message);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error retrieving yearly savings',
+      error: error.message
+    });
+  }
+};
+
 module.exports = {
   getDashboardSummary,
   getExpensesByMonth,
   getExpensesByYear,
   getCategoryBreakdown,
-  getRecentTransactions
+  getRecentTransactions,
+  getSavingsByMonth,
+  getSavingsByYear
 };
 

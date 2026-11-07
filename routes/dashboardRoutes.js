@@ -5,7 +5,9 @@ const {
   getExpensesByMonth,
   getExpensesByYear,
   getCategoryBreakdown,
-  getRecentTransactions
+  getRecentTransactions,
+  getSavingsByMonth,
+  getSavingsByYear
 } = require('../controllers/dashboardController');
 const { verifyToken } = require('../middleware/authMiddleware');
 
@@ -17,6 +19,8 @@ router.get('/expenses-by-month', getExpensesByMonth);
 router.get('/expenses-by-year', getExpensesByYear);
 router.get('/category-breakdown', getCategoryBreakdown);
 router.get('/recent-transactions', getRecentTransactions);
+router.get('/savings-by-month', getSavingsByMonth);
+router.get('/savings-by-year', getSavingsByYear);
 
 module.exports = router;
 
