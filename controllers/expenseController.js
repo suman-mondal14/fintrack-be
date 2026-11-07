@@ -1,5 +1,6 @@
 const Expense = require('../models/Expense');
 const { processUserAutoEmis } = require('../services/emiScheduler');
+const { EXPENSE_CATEGORIES, normalizeCategory } = require('../config/categories');
 
 /**
  * Initialize Google GenAI client dynamically to support both CommonJS and ESM
@@ -51,14 +52,26 @@ Extract the key financial details and return strictly a valid JSON object with n
 {
   "title": "<Merchant name, recipient person, or short payment description>",
   "amount": <Total transaction amount as a pure number, e.g. 150.00>,
-  "category": "<One of: Food, Shopping, Utilities, Bills, Entertainment, Healthcare, Travel, Education, Personal, Others>",
-  "paymentMethod": "<One of: UPI, GPay, PhonePe, Paytm, Credit Card, Debit Card, Net Banking, Others>"
+  "category": "<Exact match from allowed categories below>",
+  "paymentMethod": "<One of: UPI, GPay, PhonePe, Paytm, Credit Card, Debit Card, Net Banking, Cash, Others>"
 }
+
+Allowed Categories & Classification Rules:
+- "Groceries": Supermarkets, kirana, daily essentials, milk, vegetables (e.g., Apna Mart, DMart, Blinkit, Zepto, BigBasket, Instamart).
+- "Entertainment": BookMyShow, cinema, movies, PVR, INOX, Netflix, Spotify, OTT subscriptions, concerts, gaming, events.
+- "Food & Dining": Restaurants, food delivery, cafes, bakeries, dining out, Swiggy, Zomato, Starbucks, Domino's, McDonald's.
+- "Shopping": E-commerce, apparel, retail stores, electronics, Amazon, Flipkart, Myntra, Ajio, Meesho, Zara, Croma.
+- "Bills & Utilities": Electricity bills, water, gas, Wi-Fi, broadband, mobile recharge (Jio, Airtel, Vi), DTH, maintenance.
+- "Transport": Cabs, autos, fuel, petrol pumps (HP, IndianOil, BPCL), tolls/FASTag, metro, train (IRCTC), flights, Uber, Ola, Rapido.
+- "Health": Pharmacy, chemist, medical store, medicines, doctor fees, clinics, hospitals, diagnostics, Apollo, Netmeds, 1mg.
+- "Education": School/college fees, coaching, tuition, courses, books, Udemy, Coursera.
+- "Personal": Direct P2P transfers to individual persons, friends, or family where no business/merchant name is present (e.g., transfers to "Mousumi Ghosh", "Rahul").
+- "Others": Any uncategorized or miscellaneous payments.
 
 Strict Rules:
 - The "amount" property must be a pure number without any currency signs (no ₹, $, Rs, commas).
-- If the merchant/recipient is unclear, use "Online Payment" or "Payment".
-- If category cannot be determined, use "Others".
+- If the merchant/recipient is unclear, use "Payment".
+- If category is unclear, choose "Others".
 - If paymentMethod cannot be determined, use "UPI".`;
 
     // 3. Call Gemini model with prioritized models list
@@ -177,7 +190,8 @@ Strict Rules:
 
     const title = extractedData.title ? String(extractedData.title).trim() : 'Payment';
     const amount = Number(extractedData.amount);
-    const category = extractedData.category ? String(extractedData.category).trim() : 'Others';
+    // Apply smart keyword & synonym normalization based on merchant title and AI category
+    const category = normalizeCategory(title, extractedData.category);
     const paymentMethod = extractedData.paymentMethod ? String(extractedData.paymentMethod).trim() : 'UPI';
 
     if (isNaN(amount) || amount <= 0) {
@@ -494,6 +508,18 @@ const syncEmiExpenses = async (req, res) => {
   }
 };
 
+/**
+ * @desc    Get master list of standardized expense categories
+ * @route   GET /api/expenses/categories
+ * @access  Protected
+ */
+const getExpenseCategories = (req, res) => {
+  return res.status(200).json({
+    success: true,
+    categories: EXPENSE_CATEGORIES
+  });
+};
+
 module.exports = {
   createExpense,
   getExpenses,
@@ -501,6 +527,7 @@ module.exports = {
   updateExpense,
   deleteExpense,
   uploadAndExtractExpense,
-  syncEmiExpenses
+  syncEmiExpenses,
+  getExpenseCategories
 };
 

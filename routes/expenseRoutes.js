@@ -7,7 +7,8 @@ const {
   updateExpense,
   deleteExpense,
   uploadAndExtractExpense,
-  syncEmiExpenses
+  syncEmiExpenses,
+  getExpenseCategories
 } = require('../controllers/expenseController');
 const { verifyToken } = require('../middleware/authMiddleware');
 const upload = require('../middleware/uploadMiddleware');
@@ -20,6 +21,9 @@ router.post('/upload-screenshot', verifyToken, upload.single('screenshot'), uplo
 
 // Auto-Debit EMI Synchronization Route
 router.post('/sync-emis', syncEmiExpenses);
+
+// Master List of Standardized Expense Categories
+router.get('/categories', getExpenseCategories);
 
 // Expense Collection Routes
 router.route('/')
