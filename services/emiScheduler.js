@@ -112,6 +112,7 @@ const processUserAutoEmis = async (userId) => {
         title: `EMI: ${emi.title}`,
         amount: emi.amount,
         category: 'EMI',
+        type: 'EMI',
         paymentMethod: 'Auto-Debit',
         date: debitDate,
         isAutoDebit: true,

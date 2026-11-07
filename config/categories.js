@@ -190,8 +190,72 @@ const normalizeCategory = (title = '', detectedCategory = '') => {
   return 'Others';
 };
 
+/**
+ * Determine expense type (Pocket Money vs Wish vs EMI vs Investment)
+ * Based on user rules:
+ * - Pocket Money: Transport (railway ticket, petrol, cab, auto), P2P personal transfers, food, dining (Zomato, Swiggy), groceries (Apna Mart, DMart), bills, essentials.
+ * - Wish: E-commerce shopping (Amazon, Flipkart, Myntra, Ajio, electronics), movies (BookMyShow/BMS, District, PVR, INOX, cinema), OTT subscriptions, wishlist items.
+ * - EMI: Fixed loan EMIs & auto-debited mandates.
+ * - Investment: SIPs, mutual funds, post office schemes.
+ * @param {string} category - Standardized Category ID
+ * @param {string} title - Merchant/Recipient name
+ * @param {string} [explicitType] - Explicitly provided type
+ * @returns {'Pocket Money' | 'Wish' | 'EMI' | 'Investment'}
+ */
+const determineExpenseType = (category = '', title = '', explicitType = '') => {
+  if (explicitType) {
+    const cleanExplicit = String(explicitType).trim();
+    if (['Pocket Money', 'Wish', 'EMI', 'Investment'].includes(cleanExplicit)) {
+      return cleanExplicit;
+    }
+    const lower = cleanExplicit.toLowerCase();
+    if (lower === 'wish' || lower === 'wish expense' || lower === 'wish shopping') {
+      return 'Wish';
+    }
+    if (lower === 'pocket' || lower === 'pocket money' || lower === 'pocketmoney') {
+      return 'Pocket Money';
+    }
+  }
+
+  const cleanTitle = (title || '').toLowerCase().trim();
+  const cleanCat = (category || '').toLowerCase().trim();
+
+  // 1. EMI checks
+  if (cleanCat.includes('emi') || cleanCat.includes('loan') || cleanTitle.includes('loan') || cleanTitle.includes('emi mandate')) {
+    return 'EMI';
+  }
+
+  // 2. Investment checks
+  if (cleanCat.includes('invest') || cleanCat.includes('sip') || cleanTitle.includes('sip') || cleanTitle.includes('mutual fund') || cleanTitle.includes('post office')) {
+    return 'Investment';
+  }
+
+  // 3. Wish checks (Amazon, Flipkart, BMS, District, PVR, INOX, movies, OTT)
+  const wishKeywords = [
+    'amazon', 'flipkart', 'myntra', 'meesho', 'ajio', 'nykaa', 'tata cliq',
+    'croma', 'reliance digital', 'zara', 'h&m', 'shopping', 'lifestyle',
+    'bookmyshow', 'book my show', 'bms', 'district', 'pvr', 'inox', 'cinema',
+    'movie', 'theatre', 'netflix', 'spotify', 'prime video', 'hotstar', 'youtube premium',
+    'concert', 'gaming', 'steam', 'playstation', 'wish'
+  ];
+
+  for (const kw of wishKeywords) {
+    if (cleanTitle.includes(kw)) {
+      return 'Wish';
+    }
+  }
+
+  if (cleanCat === 'shopping' || cleanCat === 'entertainment') {
+    return 'Wish';
+  }
+
+  // 4. Everything else is Pocket Money (Food, Swiggy, Zomato, Groceries, Transport, Petrol, Railway, Person transfer, Essentials)
+  return 'Pocket Money';
+};
+
 module.exports = {
   EXPENSE_CATEGORIES,
-  normalizeCategory
+  normalizeCategory,
+  determineExpenseType
 };
 

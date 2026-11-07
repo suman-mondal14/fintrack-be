@@ -25,6 +25,12 @@ const expenseSchema = new mongoose.Schema(
       trim: true,
       default: 'Others'
     },
+    type: {
+      type: String,
+      enum: ['Pocket Money', 'Wish', 'EMI', 'Investment'],
+      default: 'Pocket Money',
+      index: true
+    },
     date: {
       type: Date,
       default: Date.now,
