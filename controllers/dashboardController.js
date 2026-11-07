@@ -28,8 +28,14 @@ const getDashboardSummary = async (req, res) => {
     const startOfMonth = new Date(year, month - 1, 1);
     const endOfMonth = new Date(year, month, 0, 23, 59, 59, 999);
 
-    // 1. Fetch user's financial profile
-    const profile = await FinancialProfile.findOne({ user: req.user.id });
+    const targetMonthStr = `${year}-${String(month).padStart(2, '0')}`;
+
+    // 1. Fetch user's financial profile for this month (fallback to most recent plan)
+    let profile = await FinancialProfile.findOne({ user: req.user.id, month: targetMonthStr });
+    if (!profile) {
+      profile = await FinancialProfile.findOne({ user: req.user.id }).sort({ month: -1 });
+    }
+
     const totalMonthlyIncome = profile?.monthlyIncome || 0;
 
     // Calculate total active investments

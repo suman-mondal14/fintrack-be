@@ -24,23 +24,27 @@ const processUserAutoEmis = async (userId) => {
   const result = { success: true, added: 0, skipped: 0, details: [] };
 
   try {
-    // 1. Condition: Verify if financial profile and EMIs exist for this user
-    const profile = await FinancialProfile.findOne({ user: userId });
-
-    if (!profile) {
-      result.details.push({ message: 'No financial profile found for user.' });
-      return result;
-    }
-
-    if (!profile.emis || profile.emis.length === 0) {
-      result.details.push({ message: 'No EMI entries found in financial profile.' });
-      return result;
-    }
-
     const now = new Date();
     const currentDay = now.getDate();
     const currentMonth = now.getMonth();
     const currentYear = now.getFullYear();
+    const currentMonthStr = `${currentYear}-${String(currentMonth + 1).padStart(2, '0')}`;
+
+    // 1. Condition: Verify if financial plan exists for current month (or fallback to latest plan)
+    let profile = await FinancialProfile.findOne({ user: userId, month: currentMonthStr });
+    if (!profile) {
+      profile = await FinancialProfile.findOne({ user: userId }).sort({ month: -1 });
+    }
+
+    if (!profile) {
+      result.details.push({ message: 'No financial plan found for user.' });
+      return result;
+    }
+
+    if (!profile.emis || profile.emis.length === 0) {
+      result.details.push({ message: 'No EMI entries found in financial plan.' });
+      return result;
+    }
 
     const startOfMonth = new Date(currentYear, currentMonth, 1);
     const endOfMonth = new Date(currentYear, currentMonth + 1, 0, 23, 59, 59, 999);
@@ -136,30 +140,28 @@ const processUserAutoEmis = async (userId) => {
 };
 
 /**
- * Checks and processes auto-EMIs across ALL users
+ * Checks and processes auto-EMIs across ALL distinct users
  */
 const processAllUsersAutoEmis = async () => {
   try {
-    const profiles = await FinancialProfile.find({ 'emis.0': { $exists: true } });
+    const userIds = await FinancialProfile.distinct('user', { 'emis.0': { $exists: true } });
 
-    if (!profiles || profiles.length === 0) {
+    if (!userIds || userIds.length === 0) {
       return { totalProfiles: 0, totalAdded: 0 };
     }
 
     let totalAdded = 0;
 
-    for (const profile of profiles) {
-      if (profile.user) {
-        const res = await processUserAutoEmis(profile.user);
-        totalAdded += res.added;
-      }
+    for (const userId of userIds) {
+      const res = await processUserAutoEmis(userId);
+      totalAdded += res.added;
     }
 
     if (totalAdded > 0) {
-      console.log(`[Auto-EMI] Auto-debited ${totalAdded} EMI expense(s) across ${profiles.length} user profile(s).`);
+      console.log(`[Auto-EMI] Auto-debited ${totalAdded} EMI expense(s) across ${userIds.length} user(s).`);
     }
 
-    return { totalProfiles: profiles.length, totalAdded };
+    return { totalUsers: userIds.length, totalAdded };
   } catch (error) {
     console.error('[Auto-EMI] Global processing error:', error.message);
     return { error: error.message };
