@@ -1,15 +1,14 @@
+// Load environment variables immediately before any other module imports
+require('dotenv').config();
+
 const express = require('express');
 const cors = require('cors');
-const dotenv = require('dotenv');
 const connectDB = require('./config/db');
 const authRoutes = require('./routes/authRoutes');
 const financialRoutes = require('./routes/financialRoutes');
 const dashboardRoutes = require('./routes/dashboardRoutes');
 const expenseRoutes = require('./routes/expenseRoutes');
 const { startEmiScheduler } = require('./services/emiScheduler');
-
-// Load environment variables from .env
-dotenv.config();
 
 // Initialize Express app
 const app = express();
